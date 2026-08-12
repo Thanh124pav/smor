@@ -1,0 +1,21 @@
+# Placeholder for the original-CAIL reproduction (PLAN.md Stage A / §3.1).
+#
+# This config is intentionally NOT run by the Module-1 pipeline. The original CAIL baseline
+# requires the upstream Stanford-ILIAD environment (MuJoCo + mujoco_py + legacy gym/PyTorch),
+# which is set up separately. See baselines/cail/README.md for exact dependencies, the pinned
+# upstream commit, and the reproduction commands.
+#
+# The `cail_original` objective must never be silently modified when reporting "CAIL".
+
+baseline: cail_original
+status: not_run_in_module1
+see: baselines/cail/README.md
+
+# Reference settings to reproduce first (small MuJoCo task):
+cail:
+  env_id: Ant-v2
+  algo: cail
+  label: 0.05
+  lr_conf: 0.1
+  pretrain_steps: 5000000
+  upstream_repo: https://github.com/Stanford-ILIAD/Confidence-Aware-Imitation-Learning

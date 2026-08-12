@@ -1,0 +1,31 @@
+# Proposed curvature-aware reweighting (PLAN.md §1.2). K>1 via truncated damped Neumann.
+reweighter:
+  n: 8
+  K: 2
+  reweight_interval: 5
+  n_beta_updates: 40
+  warmup_steps: 0
+  beta_lr: 0.3
+  beta_update: exp_grad
+  beta_floor: 1.0e-4
+  neumann_lr: 0.1
+  damping: 1.0
+  hvp_clip: 0.0
+  batch_size: 128
+  seed: 0
+  device: auto
+  fallback_k1_on_invalid: true
+
+data:
+  n_expert: 40
+  n_noisy: 40
+  noise: 0.6
+  random_prob: 0.3
+  horizon: 30
+  n_val: 20
+  hidden: [64, 64]
+  policy_lr: 0.01
+
+run:
+  eval_every: 10
+  eval_episodes: 128
