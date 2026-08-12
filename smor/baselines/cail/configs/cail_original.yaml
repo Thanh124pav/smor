@@ -1,0 +1,17 @@
+# Preserved original-CAIL configuration (PLAN.md §3.1).
+# Do NOT modify the original CAIL objective when reporting results as "CAIL".
+# This config documents the exact upstream setting to reproduce; it is not run by Module 1.
+
+name: cail_original
+paper: "Confidence-Aware Imitation Learning from Demonstrations with Varying Optimality (NeurIPS 2021)"
+upstream_repo: https://github.com/Stanford-ILIAD/Confidence-Aware-Imitation-Learning
+upstream_commit: TODO  # pin the exact commit hash when the environment is set up
+
+algo: cail            # AIRL-based instantiation with confidence reweighting
+env_id: Ant-v2        # start with one small MuJoCo setting
+label: 0.05           # fraction of trajectories with trajectory-level reward labels
+lr_conf: 0.1          # confidence-weight learning rate
+pretrain_steps: 5000000
+
+# Record at run time (PLAN.md §13):
+#   git commit, dependency versions (torch, gym, mujoco_py), seed, logs, checkpoint.
