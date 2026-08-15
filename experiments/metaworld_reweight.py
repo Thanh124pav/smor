@@ -17,10 +17,13 @@ from statistics import mean, pstdev
 
 import numpy as np
 
+from dataclasses import replace
+
 from experiments._common import build_configs, common_parser, load_yaml, overrides_from_args
+from smor.baselines.cail import cail_style_config, group_quality_from_sources
 from smor.envs.metaworld_env import METAWORLD_SOURCES
 from smor.reweighting.online_reweighter import OnlineReweighter
-from smor.reweighting.outer_objective import ValidationLoss
+from smor.reweighting.outer_objective import CAILRankingLoss, ValidationLoss
 from smor.runner import build_metaworld_run
 
 
@@ -34,6 +37,22 @@ def _train_fixed(run, weights, steps, eval_episodes):
     for _ in range(steps):
         learner.train_step(weights, learner.sample_batches(gids))
     return learner.evaluate(n_episodes=eval_episodes)
+
+
+def _save_video(learner, task, horizon, path, seed):
+    import numpy as np
+    import torch
+    from smor.evaluation.video import render_metaworld_video
+
+    def policy_fn(o):
+        t = torch.as_tensor(np.asarray(o), dtype=learner.dtype, device=learner.device).unsqueeze(0)
+        with torch.no_grad():
+            return learner.policy(t)[0].cpu().numpy()
+
+    try:
+        render_metaworld_video(task, policy_fn, path, n_episodes=3, horizon=horizon, seed=seed + 500)
+    except Exception as e:  # video is best-effort, never fail the experiment
+        print(f"[video] skipped ({type(e).__name__}: {e})")
 
 
 def _source_mass(ga, beta_vec):
@@ -51,13 +70,15 @@ def main() -> None:
     p.add_argument("--eval-horizon", type=int, default=200)
     p.add_argument("--eval-episodes", type=int, default=25)
     p.add_argument("--n-val", type=int, default=20)
+    p.add_argument("--save-video", action="store_true", help="render SMOR + CAIL rollouts to mp4")
     args = p.parse_args()
 
     raw = load_yaml(args.config) if args.config else {}
     names = [s["name"] for s in METAWORLD_SOURCES]
     n_src = len(METAWORLD_SOURCES)
     best_label = int(min(range(n_src), key=lambda i: METAWORLD_SOURCES[i].get("noise", 0.0)))
-    methods = [f"only:{names[i]}" for i in range(n_src)] + ["uniform", "static_quality", "smor"]
+    methods = ([f"only:{names[i]}" for i in range(n_src)]
+               + ["uniform", "static_quality", "cail", "smor"])
     agg = {m: {"succ": [], "val": []} for m in methods}
     smor_mass = []
 
@@ -93,6 +114,24 @@ def main() -> None:
         agg["static_quality"]["succ"].append(float(m["success_rate"])); agg["static_quality"]["val"].append(float(m["val_loss"]))
         run.env.close()
 
+        # CAIL-style baseline: common backbone, K=1 one-step + CAIL confidence-ranking loss.
+        run = _build(seed)
+        cail_cfg = cail_style_config(cfg)
+        quality = group_quality_from_sources(run.group_assignment, METAWORLD_SOURCES)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            ev_c = OnlineReweighter(cail_cfg).fit(
+                run.learner, run.group_assignment,
+                outer_objective=CAILRankingLoss(quality),
+                eval_every=10_000, eval_episodes=args.eval_episodes)
+        agg["cail"]["succ"].append(float(ev_c.eval_history["success_rate"][-1]))
+        agg["cail"]["val"].append(float(ev_c.eval_history["val_loss"][-1]))
+        if args.save_video and seed == args.seeds[0]:
+            _save_video(run.learner, args.task, args.eval_horizon,
+                        f"{args.outdir}/video_cail_{args.task}", seed)
+        run.env.close()
+
+        # SMOR: curvature-aware (K from config) + validation outer objective.
         run = _build(seed)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -102,6 +141,9 @@ def main() -> None:
         agg["smor"]["succ"].append(float(ev.eval_history["success_rate"][-1]))
         agg["smor"]["val"].append(float(ev.eval_history["val_loss"][-1]))
         smor_mass.append(_source_mass(run.group_assignment, ev.final_beta))
+        if args.save_video and seed == args.seeds[0]:
+            _save_video(run.learner, args.task, args.eval_horizon,
+                        f"{args.outdir}/video_smor_{args.task}", seed)
         run.env.close()
         print(f"[seed {seed}] smor mix="
               f"{ {names[k]: round(v,3) for k,v in smor_mass[-1].items()} }")

@@ -33,6 +33,45 @@ class ValidationLoss(OuterObjective):
         return val
 
 
+class CAILRankingLoss(OuterObjective):
+    """Common-backbone CAIL-style confidence objective (PLAN.md §3.2, §7).
+
+    A faithful adaptation of CAIL's key mechanism — learning demonstration *confidence* from a
+    quality ranking — to the shared BC backbone (no adversarial AIRL/RL loop; the original
+    AIRL-CAIL is Stage A, see smor/baselines/cail/). Given per-group quality labels, the outer
+    loss is a pairwise margin-ranking penalty over the policy's per-group BC losses: a
+    higher-quality group should be fit at least ``margin`` better than a lower-quality one,
+
+        L_out = mean over (i>j) of  softplus(margin + loss_i - loss_j).
+
+    Upweighting a high-quality group lowers its loss and this penalty, so the one-step
+    (K=1) confidence/hypergradient update concentrates beta on higher-quality demonstrations —
+    exactly CAIL's confidence behavior.
+    """
+
+    def __init__(self, group_quality: dict, margin: float = 0.02):
+        self.group_quality = {int(k): float(v) for k, v in group_quality.items()}
+        self.margin = float(margin)
+
+    def loss(self, learner) -> torch.Tensor:
+        import torch.nn.functional as F
+
+        gids = list(self.group_quality)
+        batches = learner.sample_batches(gids)
+        losses = learner.per_group_losses(batches)
+        terms = []
+        for i in gids:
+            for j in gids:
+                if self.group_quality[i] > self.group_quality[j]:
+                    terms.append(F.softplus(self.margin + losses[i] - losses[j]))
+        if not terms:
+            total = None
+            for v in losses.values():
+                total = v if total is None else total + v
+            return total / max(1, len(losses))
+        return torch.stack(terms).mean()
+
+
 class ClosedLoopReturn(OuterObjective):
     """Differentiable closed-loop return surrogate (PLAN.md §7).
 
