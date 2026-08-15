@@ -106,3 +106,43 @@ def build_multisource_run(
         device=device, val_data=val, env=env, seed=seed)
     return PointMassRun(learner=learner, group_assignment=ga, env=env,
                         train=train, val=val, device=device, source_names=names)
+
+
+def build_metaworld_run(
+    cfg: OnlineReweighterConfig,
+    task: str = "reach-v3",
+    sources: list[dict] | None = None,
+    n_per_source: int = 40,
+    demo_horizon: int = 150,
+    eval_horizon: int = 200,
+    n_val: int = 20,
+    hidden: Tuple[int, ...] = (256, 256),
+    policy_lr: float = 1e-3,
+    whole_fidelity: bool = True,
+    seed: int | None = None,
+) -> PointMassRun:
+    """Build a Meta-World multi-fidelity BC run (real manipulation task).
+
+    Training data = corrupted scripted-policy demos from several sources; validation = clean
+    scripted (proficient) demos = deployment target. Eval is a real env rollout (success rate).
+    Differentiable closed-loop objective is NOT available (MuJoCo) -> use ValidationLoss.
+    """
+    from smor.envs.metaworld_env import (
+        MetaWorldVecEnv, make_metaworld_multisource, make_metaworld_target,
+    )
+    seed = cfg.seed if seed is None else seed
+    seed_everything(seed)
+    device = str(resolve_device(cfg.device))
+
+    train, names = make_metaworld_multisource(
+        task=task, sources=sources, n_per_source=n_per_source,
+        demo_horizon=demo_horizon, seed=seed)
+    val = make_metaworld_target(task=task, n=n_val, demo_horizon=demo_horizon, seed=seed + 4242)
+    env = MetaWorldVecEnv(task=task, horizon=eval_horizon, device=device, seed=seed + 7)
+    ga = make_groups(train.fidelity_labels(), group_size=cfg.n, seed=seed,
+                     whole_fidelity=whole_fidelity)
+    learner = BCLearner(
+        train, ga, hidden=tuple(hidden), lr=policy_lr, batch_size=cfg.batch_size,
+        device=device, val_data=val, env=env, seed=seed)
+    return PointMassRun(learner=learner, group_assignment=ga, env=env,
+                        train=train, val=val, device=device, source_names=names)
