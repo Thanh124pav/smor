@@ -51,16 +51,20 @@ class BCLearner(WeightedLearner):
         env=None,
         seed: int = 0,
         dtype: torch.dtype = torch.float32,
+        data_device: str | torch.device | None = None,
     ):
         self.device = resolve_device(device)
+        # Where the (potentially large) demonstration tensors live. Keep on CPU for big
+        # datasets to avoid GPU OOM; batches are moved to self.device on sampling.
+        self.data_device = self.device if data_device is None else torch.device(data_device)
         self.dtype = dtype
         self.batch_size = int(batch_size)
         self.env = env
         self._rng = torch.Generator(device="cpu").manual_seed(seed)
 
         obs_flat, act_flat, traj_id = dataset.flatten()
-        self.obs = obs_flat.to(self.device, dtype)
-        self.act = act_flat.to(self.device, dtype)
+        self.obs = obs_flat.to(self.data_device, dtype)
+        self.act = act_flat.to(self.data_device, dtype)
         self._traj_id = traj_id
         self.group_assignment = group_assignment
 
@@ -96,8 +100,8 @@ class BCLearner(WeightedLearner):
         for gid in group_ids:
             pool = self._group_pool[int(gid)]
             sel = torch.randint(0, pool.numel(), (self.batch_size,), generator=self._rng)
-            idx = pool[sel].to(self.device)
-            out[int(gid)] = (self.obs[idx], self.act[idx])
+            idx = pool[sel].to(self.data_device)
+            out[int(gid)] = (self.obs[idx].to(self.device), self.act[idx].to(self.device))
         return out
 
     def per_group_losses(self, batch_by_group) -> Dict[int, torch.Tensor]:

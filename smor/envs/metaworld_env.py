@@ -111,6 +111,8 @@ METAWORLD_SOURCES = [
     {"name": "spacemouse",  "gain": 0.85, "noise": 0.10, "random_prob": 0.00},
     {"name": "teleop",      "gain": 1.20, "noise": 0.20, "random_prob": 0.05},
     {"name": "kinesthetic", "gain": 1.00, "noise": 0.30, "random_prob": 0.02},
+    {"name": "keyboard",    "gain": 0.70, "noise": 0.15, "random_prob": 0.03},
+    {"name": "vr_control",  "gain": 1.35, "noise": 0.12, "random_prob": 0.08},
 ]
 
 
@@ -159,6 +161,38 @@ def make_metaworld_multisource(task="reach-v3", sources=None, n_per_source=40,
         names.append(str(s.get("name", f"source{i}")))
     ds = DemoDataset(obs=torch.cat(obs_l), act=torch.cat(act_l), fidelity=torch.cat(fid_l))
     return ds, names
+
+
+def make_metaworld_datasets(task="reach-v3", sources=None, n_per_source=40, n_sources=None,
+                            demo_horizon=150, n_val=20, seed=0, cache_dir="data/metaworld"):
+    """Generate (train multisource, val target, source names) ONCE, with a disk cache.
+
+    Avoids regenerating demonstrations for every method/seed. ``n_sources`` optionally trims the
+    default source list. Cache key includes task/sources/sizes/horizon/seed.
+    """
+    import hashlib
+    from pathlib import Path
+    from smor.envs.demos import DemoDataset
+
+    src = sources if sources is not None else METAWORLD_SOURCES
+    if n_sources is not None:
+        src = src[:n_sources]
+    key = f"{task}|{[s['name'] for s in src]}|nps{n_per_source}|h{demo_horizon}|v{n_val}|s{seed}"
+    tag = hashlib.md5(key.encode()).hexdigest()[:12]
+    cache = Path(cache_dir) / f"mw_{task}_{tag}.pt"
+    if cache.exists():
+        d = torch.load(cache, map_location="cpu")
+        return (DemoDataset(d["tr_obs"], d["tr_act"], d["tr_fid"]),
+                DemoDataset(d["va_obs"], d["va_act"], d["va_fid"]), d["names"])
+
+    train, names = make_metaworld_multisource(task=task, sources=src, n_per_source=n_per_source,
+                                              demo_horizon=demo_horizon, seed=seed)
+    val = make_metaworld_target(task=task, n=n_val, demo_horizon=demo_horizon, seed=seed + 4242)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"tr_obs": train.obs, "tr_act": train.act, "tr_fid": train.fidelity,
+                "va_obs": val.obs, "va_act": val.act, "va_fid": val.fidelity,
+                "names": names}, cache)
+    return train, val, names
 
 
 def make_metaworld_target(task="reach-v3", n=20, demo_horizon=150, seed=0):
