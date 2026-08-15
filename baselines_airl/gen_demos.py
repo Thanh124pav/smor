@@ -20,17 +20,33 @@ from imitation.policies.serialize import load_policy
 from imitation.util.util import make_vec_env
 
 ENV = "seals/HalfCheetah-v1"
-SOURCES = [
+
+# "quality" mode: a pure quality gradient (expert>medium>noisy) -> beta trivially -> expert.
+QUALITY_SOURCES = [
     {"name": "expert", "noise": 0.0},
     {"name": "medium", "noise": 0.5},
     {"name": "noisy",  "noise": 1.2},
 ]
 
+# "styles" mode: genuinely DIFFERENT devices (SpaceMouse vs teleop vs kinesthetic). Each has its
+# own systematic miscalibration, NONE is clean, so the best policy needs a NON-TRIVIAL MIXTURE
+# (an undershooting + an overshooting device blend toward unit gain; a per-limb-biased device is
+# only useful in part). This is the setting where beta=1.0 is wrong and reweighting matters.
+STYLE_SOURCES = [
+    # Opposite systematic torque offsets of DIFFERENT magnitude: no single device is clean, and
+    # the bias only cancels for an interior, asymmetric mixture (optimal beta_A/beta_B = 0.2/0.35),
+    # so uniform (0.5/0.5) leaves residual bias and single-source keeps full bias.
+    {"name": "spacemouse",  "bias": [0.35] * 6, "noise": 0.10},                 # + offset (large)
+    {"name": "teleop",      "bias": [-0.20] * 6, "noise": 0.10},                # - offset (small)
+    {"name": "kinesthetic", "bias": [0.3, -0.3, 0.3, -0.3, 0.3, -0.3], "noise": 0.10},  # per-limb
+]
 
-def corrupt_rollouts(expert, venv, n_eps, noise, seed):
-    """Collect n_eps trajectories where the executed action = expert + noise (recorded as target)."""
+
+def corrupt_rollouts(expert, venv, n_eps, noise, seed, gain=1.0, bias=None):
+    """Collect n_eps trajectories; executed action = gain*expert + bias + noise (recorded target)."""
     rng = np.random.default_rng(seed)
     trajs = []
+    bias = np.asarray(bias, dtype=np.float32) if bias is not None else 0.0
     from imitation.data.types import TrajectoryWithRew
     for ep in range(n_eps):
         obs = venv.envs[0].reset(seed=seed + ep)[0]
@@ -38,7 +54,8 @@ def corrupt_rollouts(expert, venv, n_eps, noise, seed):
         done = False
         while not done:
             a_exp, _ = expert.predict(obs, deterministic=True)
-            a = np.clip(a_exp + noise * rng.standard_normal(a_exp.shape).astype(np.float32),
+            a = np.clip(gain * a_exp + bias
+                        + noise * rng.standard_normal(a_exp.shape).astype(np.float32),
                         venv.action_space.low, venv.action_space.high)
             O.append(np.asarray(obs, dtype=np.float32)); A.append(np.asarray(a, dtype=np.float32))
             obs, r, term, trunc, info = venv.envs[0].step(a)
@@ -53,18 +70,23 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--n-per-source", type=int, default=40)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--mode", choices=["quality", "styles"], default="styles")
     p.add_argument("--out", type=str, default="results/airl_mujoco")
     args = p.parse_args()
 
+    SOURCES = STYLE_SOURCES if args.mode == "styles" else QUALITY_SOURCES
     venv = make_vec_env(ENV, rng=np.random.default_rng(args.seed), n_envs=1,
                         post_wrappers=[lambda e, _: RolloutInfoWrapper(e)])
     expert = load_policy("ppo-huggingface", venv=venv, env_name=ENV)
 
     all_trajs, flat_obs, flat_act, flat_fid, names = {}, [], [], [], []
     for i, s in enumerate(SOURCES):
-        trajs = corrupt_rollouts(expert, venv, args.n_per_source, s["noise"], args.seed + 100 * (i + 1))
+        trajs = corrupt_rollouts(expert, venv, args.n_per_source, s.get("noise", 0.0),
+                                 args.seed + 100 * (i + 1),
+                                 gain=s.get("gain", 1.0), bias=s.get("bias"))
         rets = np.array([t.rews.sum() for t in trajs])
-        print(f"source {s['name']:>7} (noise {s['noise']}): return {rets.mean():.0f} +- {rets.std():.0f}")
+        print(f"source {s['name']:>12} (gain {s.get('gain',1.0)}, noise {s.get('noise',0.0)}): "
+              f"return {rets.mean():.0f} +- {rets.std():.0f}")
         all_trajs[s["name"]] = trajs
         names.append(s["name"])
         for t in trajs:
