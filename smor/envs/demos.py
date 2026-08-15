@@ -166,8 +166,9 @@ def make_two_fidelity_dataset(
 # performance). A single source under/overshoots and naive uniform doesn't balance the different
 # magnitudes -> the optimal beta is an interior, asymmetric mixture.
 DEFAULT_SOURCES = [
-    {"name": "spacemouse", "rotation_deg": +10.0, "gain": 0.80, "noise": 0.05, "random_prob": 0.00},
-    {"name": "teleop",     "rotation_deg": -15.0, "gain": 1.25, "noise": 0.10, "random_prob": 0.05},
+    {"name": "spacemouse",  "rotation_deg": +8.0,  "gain": 0.80, "noise": 0.05, "random_prob": 0.00},
+    {"name": "teleop",      "rotation_deg": -12.0, "gain": 1.25, "noise": 0.10, "random_prob": 0.05},
+    {"name": "kinesthetic", "rotation_deg": +22.0, "gain": 1.00, "noise": 0.14, "random_prob": 0.02},
 ]
 
 
