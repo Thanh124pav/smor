@@ -8,7 +8,10 @@ reweighter:
   beta_lr: 0.3
   beta_update: exp_grad
   beta_floor: 1.0e-4
-  neumann_lr: 0.1
+  neumann_lr: 0.1          # used only when neumann_auto is false
+  neumann_auto: true       # auto-scale eta_h = safety/lambda_max (stable across model sizes)
+  neumann_safety: 1.0
+  neumann_power_iters: 10
   damping: 1.0
   hvp_clip: 0.0
   batch_size: 128

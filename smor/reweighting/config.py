@@ -28,7 +28,10 @@ class OnlineReweighterConfig:
     beta_standardize: bool = True   # standardize scores to unit std (scale-invariant step)
 
     # --- curvature operator (§1.2) ---
-    neumann_lr: float = 0.1         # eta_h
+    neumann_lr: float = 0.1         # eta_h (used when neumann_auto is False)
+    neumann_auto: bool = False      # auto-scale eta_h = neumann_safety / lambda_max(H+lambda I)
+    neumann_safety: float = 1.0     # contraction margin (<2); eta_h*lambda_max = safety
+    neumann_power_iters: int = 10   # power-iteration steps for lambda_max estimate
     damping: float = 1.0            # lambda in (H + lambda I)
     hvp_clip: float = 0.0           # 0 disables; else clip HVP vector norm
 

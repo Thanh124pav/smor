@@ -108,15 +108,27 @@ class OnlineReweighter:
 
             weights_f = beta.weight_dict(gids)
             inner_loss = None
+            eff_neumann_lr = cfg.neumann_lr
+            lambda_max = None
             if cfg.K > 1:
                 inner_loss = None
                 for gid in gids:
                     term = weights_f[gid] * group_losses[gid]
                     inner_loss = term if inner_loss is None else inner_loss + term
+                if cfg.neumann_auto:
+                    # Auto-scale the Neumann step to the curvature so the series contracts
+                    # (eta_h * lambda_max = safety < 2), stable across model sizes.
+                    from smor.reweighting.neumann import estimate_lambda_max
+                    lambda_max = estimate_lambda_max(
+                        inner_loss, learner.parameters_for_reweighting(),
+                        damping=cfg.damping, n_iters=cfg.neumann_power_iters, seed=idx,
+                    )
+                    if lambda_max > 1e-8:
+                        eff_neumann_lr = cfg.neumann_safety / lambda_max
 
             hg, hmeta = group_hypergradient(
                 group_losses, outer_loss, learner.parameters_for_reweighting(),
-                K=cfg.K, neumann_lr=cfg.neumann_lr, damping=cfg.damping,
+                K=cfg.K, neumann_lr=eff_neumann_lr, damping=cfg.damping,
                 inner_loss=inner_loss, hvp_clip=cfg.hvp_clip,
                 fallback_k1_on_invalid=cfg.fallback_k1_on_invalid, return_meta=True,
             )
@@ -134,6 +146,9 @@ class OnlineReweighter:
             compute_history["hvp_count"].append(hmeta["hvp_count"])
             compute_history["n_fallbacks"].append(hmeta["n_fallbacks"])
             compute_history["policy_steps"].append(policy_steps)
+            if cfg.K > 1 and cfg.neumann_auto:
+                compute_history["neumann_lr_eff"].append(float(eff_neumann_lr))
+                compute_history["lambda_max"].append(float(lambda_max) if lambda_max else 0.0)
 
             group_loss_vals = {g: float(group_losses[g].detach()) for g in gids}
             if logger is not None:

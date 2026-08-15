@@ -29,6 +29,9 @@ def main():
     p.add_argument("--no-standardize", action="store_true")
     p.add_argument("--neumann-lr", type=float, default=0.1)
     p.add_argument("--damping", type=float, default=1.0)
+    p.add_argument("--neumann-auto", action="store_true",
+                   help="auto-scale eta_h = safety/lambda_max via power iteration")
+    p.add_argument("--neumann-safety", type=float, default=1.0)
     p.add_argument("--out", type=str, default="results/airl_mujoco")
     args = p.parse_args()
 
@@ -62,6 +65,7 @@ def main():
             n=999, K=K, reweight_interval=args.reweight_interval,
             n_beta_updates=args.bc_steps // args.reweight_interval, beta_lr=args.beta_lr,
             neumann_lr=args.neumann_lr, damping=args.damping, batch_size=256, device="cpu",
+            neumann_auto=args.neumann_auto, neumann_safety=args.neumann_safety,
             beta_standardize=not args.no_standardize)
         ev = OnlineReweighter(cfg).fit(learner, ga, outer_objective=ValidationLoss(),
                                        eval_every=10_000, eval_episodes=args.eval_eps)

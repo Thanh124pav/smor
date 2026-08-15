@@ -136,6 +136,32 @@ def test_group_hypergradient_k_gt_1_matches_explicit():
         assert abs(h[j] - ref) < 1e-8
 
 
+def test_estimate_lambda_max_matches_known_spectrum():
+    from smor.reweighting.neumann import estimate_lambda_max
+    eigs = [0.5, 1.0, 2.0, 7.0]
+    theta, loss, H = _spd_quadratic(eigs)
+    # undamped: lambda_max(H) ~= 7
+    lm = estimate_lambda_max(loss(), [theta], damping=0.0, n_iters=50)
+    assert abs(lm - 7.0) < 1e-2, lm
+    # damped: lambda_max(H + 3I) ~= 10
+    lm2 = estimate_lambda_max(loss(), [theta], damping=3.0, n_iters=50)
+    assert abs(lm2 - 10.0) < 1e-2, lm2
+
+
+def test_auto_scaled_neumann_contracts():
+    # With eta_h = 1/lambda_max, P_K must stay finite and converge to (H+lambda I)^{-1}.
+    from smor.reweighting.neumann import estimate_lambda_max
+    theta, loss, H = _spd_quadratic([0.5, 1.0, 3.0, 9.0])
+    v = torch.randn(4, dtype=torch.float64)
+    lam = 0.5
+    lmax = estimate_lambda_max(loss(), [theta], damping=lam, n_iters=50)
+    eta = 1.0 / lmax
+    target = torch.linalg.solve(H + lam * torch.eye(4, dtype=torch.float64), v)
+    got = apply_pk(v, loss(), [theta], K=64, neumann_lr=eta, damping=lam)
+    assert torch.isfinite(got).all()
+    assert float((got - target).norm()) < 1e-2
+
+
 def test_rejects_k_less_than_one():
     theta, loss, H = _spd_quadratic([1.0, 2.0])
     v = torch.randn(2, dtype=torch.float64)

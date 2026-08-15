@@ -45,6 +45,21 @@ hypergradient is garbage.
 
 With a contracting step, K>1 recovers correct behaviour (β→expert, return ≈ oracle).
 
+## 4. Fix landed: auto-scaled Neumann step (`neumann_auto`)
+`estimate_lambda_max` (power iteration over HVPs) estimates `lambda_max(H+lambda I)`; the
+reweighter then sets `eta_h = neumann_safety / lambda_max` each beta update so the series always
+contracts, with no per-model tuning. `ksweep --Ks 1 2 4 8 --neumann-auto`:
+
+| K | β(expert/med/noisy) | return |
+|---|---|---|
+| 1 | 1.0 / 0 / 0 | 1447 |
+| 2 | 1.0 / 0 / 0 | 1443 |
+| 4 | 1.0 / 0 / 0 | 1488 |
+| 8 | 1.0 / 0 / 0 | 1346 |
+
+Every K now recovers β→expert and return ≈ oracle — the instability is gone without hand-tuning.
+Enabled by default in `configs/curvature_reweight.yaml`.
+
 ## Takeaways
 - The reweighting mechanism is **validated on a real MuJoCo task**, not just point-mass.
 - **K=1 is sufficient here** (K>1 matches but does not beat it) — consistent with PLAN §16.6.

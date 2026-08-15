@@ -24,6 +24,35 @@ from smor.reweighting.hvp import hvp, flat_grad_with_graph
 from smor.utils.checks import SafetyError
 
 
+def estimate_lambda_max(
+    inner_loss: torch.Tensor,
+    params: Iterable[torch.nn.Parameter],
+    damping: float = 0.0,
+    n_iters: int = 10,
+    seed: int = 0,
+) -> float:
+    """Estimate the largest eigenvalue of the damped Hessian ``H + damping*I`` via power
+    iteration on HVPs (no matrix formed). Used to auto-scale the Neumann step so the series
+    contracts: ``eta_h < 2 / lambda_max``.
+    """
+    params = list(params)
+    n = sum(p.numel() for p in params)
+    dev = params[0].device
+    gen = torch.Generator(device="cpu").manual_seed(seed)
+    v = torch.randn(n, generator=gen).to(dev, params[0].dtype)
+    v = v / (v.norm() + 1e-12)
+    grad = flat_grad_with_graph(inner_loss, params)  # reused across iterations (fixed theta)
+    lam = 0.0
+    for _ in range(max(1, n_iters)):
+        Hv = hvp(inner_loss, params, v, grad=grad) + damping * v
+        lam = float(torch.dot(v, Hv))          # Rayleigh quotient (v is unit-norm)
+        nrm = float(Hv.norm())
+        if nrm < 1e-12:
+            break
+        v = Hv / nrm
+    return abs(lam)
+
+
 def apply_pk(
     vector: torch.Tensor,
     inner_loss: torch.Tensor,
