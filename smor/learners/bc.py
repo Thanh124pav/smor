@@ -86,6 +86,10 @@ class BCLearner(WeightedLearner):
         self.policy = MLPPolicy(dataset.obs_dim, dataset.act_dim, hidden).to(self.device, dtype)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
 
+        # fixed start/goal batch for the differentiable closed-loop outer objective
+        self._cl_pos: Optional[torch.Tensor] = None
+        self._cl_goal: Optional[torch.Tensor] = None
+
     # ---- WeightedLearner contract --------------------------------------
     def sample_batches(self, group_ids: Iterable[int]) -> Dict[int, Batch]:
         out: Dict[int, Batch] = {}
@@ -144,6 +148,40 @@ class BCLearner(WeightedLearner):
             obs, act = self._val_obs[sel], self._val_act[sel]
         pred = self.policy(obs)
         return ((pred - act) ** 2).mean()
+
+    def closed_loop_loss(self, n_episodes: int = 128, horizon: Optional[int] = None) -> torch.Tensor:
+        """Differentiable closed-loop return surrogate (PLAN.md §7).
+
+        Rolls the current policy through the point-mass dynamics (which are pure torch, hence
+        differentiable) from a FIXED set of start/goal pairs and returns the mean
+        distance-to-goal over the horizon. Minimizing it maximizes episodic return, so it is a
+        closed-loop outer objective — unlike open-loop validation MSE it accounts for how action
+        errors compound over a rollout (e.g. penalizes systematic over/undershoot).
+        """
+        if self.env is None:
+            raise ValueError("closed_loop_loss requires an env.")
+        cfg = self.env.cfg
+        H = int(horizon or self.env.horizon)
+        if self._cl_pos is None or self._cl_pos.shape[0] != n_episodes:
+            g = torch.Generator().manual_seed(12345)
+            pos = (torch.rand(n_episodes, 2, generator=g) * 2 - 1) * cfg.world
+            goal = (torch.rand(n_episodes, 2, generator=g) * 2 - 1) * cfg.world
+            for _ in range(10):
+                close = (pos - goal).norm(dim=-1) < cfg.min_start_goal_dist
+                if not close.any():
+                    break
+                ng = (torch.rand(n_episodes, 2, generator=g) * 2 - 1) * cfg.world
+                goal = torch.where(close.unsqueeze(-1), ng, goal)
+            self._cl_pos = pos.to(self.device, self.dtype)
+            self._cl_goal = goal.to(self.device, self.dtype)
+        pos, goal = self._cl_pos, self._cl_goal
+        total = pos.new_zeros(())
+        for _ in range(H):
+            obs = torch.cat([pos, goal], dim=-1)
+            action = self.policy(obs)
+            pos = torch.clamp(pos + cfg.max_step * action, -cfg.world, cfg.world)
+            total = total + (pos - goal).norm(dim=-1).mean()
+        return total / H
 
     # ---- checkpointing --------------------------------------------------
     def state_dict(self) -> dict:

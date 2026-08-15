@@ -26,6 +26,7 @@ import numpy as np
 from experiments._common import build_configs, common_parser, load_yaml, overrides_from_args
 from smor.envs.demos import DEFAULT_SOURCES
 from smor.reweighting.online_reweighter import OnlineReweighter
+from smor.reweighting.outer_objective import ClosedLoopReturn, ValidationLoss
 from smor.runner import build_multisource_run
 
 
@@ -54,6 +55,9 @@ def main() -> None:
     parser.add_argument("--horizon", type=int, default=22,
                         help="shorter horizon makes return more sensitive to systematic error")
     parser.add_argument("--whole-fidelity", action="store_true", default=True)
+    parser.add_argument("--outer", choices=["val", "return"], default="return",
+                        help="SMOR outer objective: open-loop val MSE or differentiable "
+                             "closed-loop return surrogate")
     args = parser.parse_args()
 
     raw = load_yaml(args.config) if args.config else {}
@@ -98,9 +102,11 @@ def main() -> None:
 
         run = build_multisource_run(cfg, n_per_source=args.n_per_source, horizon=args.horizon,
                                     whole_fidelity=args.whole_fidelity, seed=seed)
+        outer = ClosedLoopReturn() if args.outer == "return" else ValidationLoss()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             ev = OnlineReweighter(cfg).fit(run.learner, run.group_assignment,
+                                           outer_objective=outer,
                                            eval_every=10_000, eval_episodes=128)
         agg["smor"]["val"].append(float(ev.eval_history["val_loss"][-1]))
         agg["smor"]["ret"].append(float(ev.eval_history["return_mean"][-1]))
