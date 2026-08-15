@@ -33,12 +33,13 @@ QUALITY_SOURCES = [
 # (an undershooting + an overshooting device blend toward unit gain; a per-limb-biased device is
 # only useful in part). This is the setting where beta=1.0 is wrong and reweighting matters.
 STYLE_SOURCES = [
-    # Opposite systematic torque offsets of DIFFERENT magnitude: no single device is clean, and
-    # the bias only cancels for an interior, asymmetric mixture (optimal beta_A/beta_B = 0.2/0.35),
-    # so uniform (0.5/0.5) leaves residual bias and single-source keeps full bias.
-    {"name": "spacemouse",  "bias": [0.35] * 6, "noise": 0.10},                 # + offset (large)
-    {"name": "teleop",      "bias": [-0.20] * 6, "noise": 0.10},                # - offset (small)
-    {"name": "kinesthetic", "bias": [0.3, -0.3, 0.3, -0.3, 0.3, -0.3], "noise": 0.10},  # per-limb
+    # Complementary ALTERNATING per-joint biases (moderate, not catastrophic on HalfCheetah) with
+    # opposite patterns and DIFFERENT magnitude: every single device is moderately suboptimal, and
+    # only an interior, asymmetric mixture cancels the bias back to clean-expert behaviour
+    # (optimal beta_A/beta_B ~= 0.2/0.3), so uniform leaves residual bias and no single wins.
+    {"name": "spacemouse",  "bias": [+0.3, -0.3, +0.3, -0.3, +0.3, -0.3], "noise": 0.10},
+    {"name": "teleop",      "bias": [-0.2, +0.2, -0.2, +0.2, -0.2, +0.2], "noise": 0.10},
+    {"name": "kinesthetic", "bias": [+0.25, +0.25, -0.25, -0.25, 0.0, 0.0], "noise": 0.10},
 ]
 
 
