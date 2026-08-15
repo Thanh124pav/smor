@@ -18,6 +18,10 @@ KS_GRID="${KS_GRID:-1 2 4}"
 
 log() { echo; echo "########## $* ##########"; }
 
+log "COMPARE_METHODS: uniform vs static_quality vs SMOR (3 seeds)"
+python -m experiments.compare_methods --config "$CFG" --n 8 --K 2 --seeds 0 1 2 \
+    --device "$DEVICE" --outdir "$OUTDIR"
+
 log "TRAIN sweep K=[$KS] at n=8 (steps=$STEPS)"
 for K in $KS; do
   python -m experiments.train_reweighting --config "$CFG" --n 8 --K "$K" --steps "$STEPS" \
