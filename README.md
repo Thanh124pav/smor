@@ -83,6 +83,21 @@ python -m experiments.train_reweighting --config configs/curvature_reweight.yaml
 `summary.json`. It reports **episodic return + success rate** (real env rollouts) before/after,
 plus how much `beta` mass moved onto the expert (high-fidelity) group.
 
+## Scripts
+
+Convenience wrappers in `scripts/` (they activate the `deeplearning` conda env, `cd` to the
+repo root, and pick a device). Control the device with `DEVICE=cuda|cpu|auto` (default `auto`).
+
+```bash
+bash scripts/smoke.sh              # fast end-to-end flow check (tests + a tiny run of every driver)
+bash scripts/run_experiments.sh    # full suite -> results/ (reproduces RESULTS_REWEIGHTING.md)
+DEVICE=cpu bash scripts/smoke.sh   # force CPU
+```
+
+The models are tiny MLPs: a full run peaks at ~**20 MB VRAM**, so a 4 GB GPU (e.g. GTX 1650) is
+more than enough; CPU also works. The only slow cells are `n=1` (one β cell per trajectory →
+many HVPs) — override granularities via `NS_COMPARE`/`NS_GRID` env vars if needed.
+
 ## Experiment matrix (`n` × `K`)
 
 ```bash
