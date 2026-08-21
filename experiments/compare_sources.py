@@ -66,8 +66,8 @@ def main() -> None:
     # naive "best fidelity" = lowest-noise source
     best_label = int(min(range(n_src), key=lambda i: DEFAULT_SOURCES[i].get("noise", 0.0)))
 
-    methods = [f"only:{names[i]}" for i in range(n_src)] + ["uniform", "static_quality", "smor"]
-    agg = {m: {"val": [], "ret": []} for m in methods}
+    methods = [f"only:{names[i]}" for i in range(n_src)] + ["uniform", "static_quality", "cail", "smor"]
+    agg = {m: {"val": [], "ret": [], "succ": []} for m in methods}
     smor_mass = []
 
     for seed in args.seeds:
@@ -83,6 +83,7 @@ def main() -> None:
             m = _train_fixed(run, w, _total_steps(cfg))
             agg[f"only:{names[i]}"]["val"].append(float(m["val_loss"]))
             agg[f"only:{names[i]}"]["ret"].append(float(m["return_mean"]))
+            agg[f"only:{names[i]}"]["succ"].append(float(m.get("success_rate", float("nan"))))
 
         run = build_multisource_run(cfg, n_per_source=args.n_per_source, horizon=args.horizon,
                                     whole_fidelity=args.whole_fidelity, seed=seed)
@@ -90,6 +91,7 @@ def main() -> None:
         M = len(gids)
         m = _train_fixed(run, {g: 1.0 / M for g in gids}, _total_steps(cfg))
         agg["uniform"]["val"].append(float(m["val_loss"])); agg["uniform"]["ret"].append(float(m["return_mean"]))
+        agg["uniform"]["succ"].append(float(m.get("success_rate", float("nan"))))
 
         run = build_multisource_run(cfg, n_per_source=args.n_per_source, horizon=args.horizon,
                                     whole_fidelity=args.whole_fidelity, seed=seed)
@@ -99,29 +101,37 @@ def main() -> None:
         tot = sum(w.values()); w = {g: v / tot for g, v in w.items()}
         m = _train_fixed(run, w, _total_steps(cfg))
         agg["static_quality"]["val"].append(float(m["val_loss"])); agg["static_quality"]["ret"].append(float(m["return_mean"]))
+        agg["static_quality"]["succ"].append(float(m.get("success_rate", float("nan"))))
 
-        run = build_multisource_run(cfg, n_per_source=args.n_per_source, horizon=args.horizon,
-                                    whole_fidelity=args.whole_fidelity, seed=seed)
         outer = ClosedLoopReturn() if args.outer == "return" else ValidationLoss()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            ev = OnlineReweighter(cfg).fit(run.learner, run.group_assignment,
-                                           outer_objective=outer,
-                                           eval_every=10_000, eval_episodes=128)
-        agg["smor"]["val"].append(float(ev.eval_history["val_loss"][-1]))
-        agg["smor"]["ret"].append(float(ev.eval_history["return_mean"][-1]))
+        # CAIL (K=1) and SMOR (K>1) share the SAME closed-loop outer objective; only K differs.
+        from smor.baselines.cail import cail_style_config
+        for name, run_cfg in [("cail", cail_style_config(cfg)), ("smor", cfg)]:
+            run = build_multisource_run(cfg, n_per_source=args.n_per_source, horizon=args.horizon,
+                                        whole_fidelity=args.whole_fidelity, seed=seed)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                ev = OnlineReweighter(run_cfg).fit(run.learner, run.group_assignment,
+                                                   outer_objective=outer,
+                                                   eval_every=10_000, eval_episodes=128)
+            agg[name]["val"].append(float(ev.eval_history["val_loss"][-1]))
+            agg[name]["ret"].append(float(ev.eval_history["return_mean"][-1]))
+            agg[name]["succ"].append(float(ev.eval_history.get("success_rate", [float("nan")])[-1]))
+            if name == "smor":
+                smor_ev = ev; smor_run = run
         smor_mass.append(_source_mass(run.group_assignment, ev.final_beta))
         print(f"[seed {seed}] done  smor beta(source)="
               f"{ {names[k]: round(v,3) for k,v in _source_mass(run.group_assignment, ev.final_beta).items()} }")
 
     print(f"\nsources: {names}  (naive best-fidelity = {names[best_label]})  seeds={args.seeds}  K={cfg.K}\n")
-    print(f"{'method':>18} {'val_loss':>16} {'return':>16}")
+    print(f"{'method':>18} {'val_loss':>16} {'return':>16} {'success':>10}")
     rows = {}
     for m in methods:
         vv, vs = mean(agg[m]["val"]), (pstdev(agg[m]["val"]) if len(agg[m]["val"]) > 1 else 0.0)
         rv, rs = mean(agg[m]["ret"]), (pstdev(agg[m]["ret"]) if len(agg[m]["ret"]) > 1 else 0.0)
-        rows[m] = {"val_mean": vv, "val_std": vs, "ret_mean": rv, "ret_std": rs}
-        print(f"{m:>18} {vv:>10.4f} ± {vs:<4.4f} {rv:>9.2f} ± {rs:<5.2f}")
+        sc = mean(agg[m]["succ"]) if agg[m]["succ"] else float("nan")
+        rows[m] = {"val_mean": vv, "val_std": vs, "ret_mean": rv, "ret_std": rs, "succ_mean": sc}
+        print(f"{m:>18} {vv:>10.4f} ± {vs:<4.4f} {rv:>9.2f} ± {rs:<5.2f} {sc:>10.3f}")
 
     mean_mass = {names[k]: mean([mm[k] for mm in smor_mass]) for k in range(n_src)}
     print(f"\nSMOR learned source mixture (mean): "

@@ -130,7 +130,8 @@ class OnlineReweighter:
                 group_losses, outer_loss, learner.parameters_for_reweighting(),
                 K=cfg.K, neumann_lr=eff_neumann_lr, damping=cfg.damping,
                 inner_loss=inner_loss, hvp_clip=cfg.hvp_clip,
-                fallback_k1_on_invalid=cfg.fallback_k1_on_invalid, return_meta=True,
+                fallback_k1_on_invalid=cfg.fallback_k1_on_invalid,
+                normalize_group_grads=cfg.normalize_group_grads, return_meta=True,
             )
             hvp_time = time.perf_counter() - t0
 

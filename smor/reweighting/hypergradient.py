@@ -63,6 +63,7 @@ def group_hypergradient(
     inner_loss: Optional[torch.Tensor] = None,
     hvp_clip: float = 0.0,
     fallback_k1_on_invalid: bool = True,
+    normalize_group_grads: bool = False,
     return_meta: bool = False,
 ) -> Dict[int, float] | Tuple[Dict[int, float], dict]:
     """Estimate ``h_j^{(K)}`` for every group.
@@ -98,6 +99,12 @@ def group_hypergradient(
     for gid, L_j in group_losses.items():
         g_j = gather_flat_grad(L_j, params, create_graph=False, retain_graph=True).detach()
         check_finite(g_j, f"g_{gid}")
+        if normalize_group_grads:
+            # cosine alignment: divide out ||g_j|| so upweighting is driven by DIRECTION, not by
+            # which group is currently worst-fit (largest gradient). Critical when g_out is noisy.
+            gj_norm = g_j.norm()
+            if float(gj_norm) > 1e-12:
+                g_j = g_j / gj_norm
         if K == 1:
             v = neumann_lr * g_j
         else:

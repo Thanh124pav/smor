@@ -11,7 +11,8 @@ import torch
 class MujocoVecEnv:
     def __init__(self, env_id="seals/HalfCheetah-v1", horizon=1000, device="cpu", seed=0):
         import gymnasium as gym
-        import seals  # noqa: F401  registers seals/ envs
+        if str(env_id).startswith("seals/"):
+            import seals  # noqa: F401  registers seals/ envs (only needed for seals/* ids)
         self.env_id = env_id
         self.cfg_horizon = int(horizon)
         self.device = torch.device(device)

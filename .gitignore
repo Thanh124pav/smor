@@ -8,6 +8,10 @@ dist/
 # run artifacts
 runs/
 results/
-data/
+# downloaded dataset cache at repo root (NOT the smor/data source package)
+/data/
 *.pt
 *.npz
+
+# personal / unrelated files (not part of the codebase)
+*.pdf

@@ -1,0 +1,16 @@
+# SMOR curvature-aware reweighting on RoboMimic multi-fidelity demonstrations.
+# Real human-quality tiers (multi-human better/okay/worse) or variant quality (ph vs mg).
+# Sized for real 19-dim low-dim manipulation data (bigger net + auto-scaled Neumann for K>1).
+reweighter:
+  n: 8                 # trajectories per beta cell (whole_fidelity grouping used by the driver)
+  K: 4                 # curvature depth; K=1 is the CAIL-style one-step baseline
+  reweight_interval: 5
+  n_beta_updates: 200
+  warmup_steps: 40     # BC warmup before reweighting (real data needs a few real steps)
+  batch_size: 128
+  beta_lr: 0.5
+  beta_standardize: true
+  neumann_auto: true   # auto-scale eta_h from lambda_max — required for stable K>1 on high-dim
+  neumann_safety: 1.0
+  damping: 1.0
+  device: auto

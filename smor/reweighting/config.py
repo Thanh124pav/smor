@@ -34,6 +34,9 @@ class OnlineReweighterConfig:
     neumann_power_iters: int = 10   # power-iteration steps for lambda_max estimate
     damping: float = 1.0            # lambda in (H + lambda I)
     hvp_clip: float = 0.0           # 0 disables; else clip HVP vector norm
+    normalize_group_grads: bool = False  # use cosine alignment (g_j/||g_j||) in the hypergradient;
+                                    # fixes the magnitude artifact where poorly-fit (outlier) groups
+                                    # dominate a noisy g_out (e.g. under a closed-loop/PG outer loss)
 
     # --- inner batch / eval ---
     batch_size: int = 64            # per-group batch size for losses

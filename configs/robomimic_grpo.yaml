@@ -1,0 +1,15 @@
+# SMOR + GRPO closed-loop-return outer loss on RoboMimic (robosuite).
+# Long BC warmup so the policy reaches competence (can sometimes lift) BEFORE the GRPO signal is
+# meaningful, then a short phase of GRPO beta fine-tuning (each beta update rolls out the env).
+reweighter:
+  n: 8
+  K: 4
+  warmup_steps: 3000        # BC to competence first (GRPO signal is useless on a random policy)
+  n_beta_updates: 30        # GRPO beta updates (each = a robosuite rollout -> keep small)
+  reweight_interval: 10
+  batch_size: 256
+  beta_lr: 0.3
+  beta_standardize: true
+  neumann_auto: true
+  normalize_group_grads: true   # cosine g_j alignment (essential under a noisy PG outer loss)
+  device: auto

@@ -1,0 +1,44 @@
+# Module 2 — two-source scaling-law MVP (spec §41).
+# Phase 1 sources: RoboMimic PH vs MG (proficient-human vs machine-generated), reusing Module 1.
+experiment:
+  name: "two_source_scaling_mvp"
+
+sources:
+  - id: "ph"
+    path: "data/robomimic/lift/ph/low_dim_v141.hdf5"
+    cost: 1.0
+  - id: "mg"
+    path: "data/robomimic/lift/mg/low_dim_sparse_v141.hdf5"
+    cost: 1.0
+
+# Budgets scaled to the smaller source pool: PH has 200 demos (20 reserved for the val target ->
+# pool 180), so at mixture p=1 (pure PH) the budget must stay <= 180. MG pool is 1500.
+budgets:
+  all: [20, 40, 80, 120, 160]
+  fit: [20, 40, 80]
+  heldout: [120, 160]
+
+mixtures:
+  source_A: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]   # source_A = PH (source 0); source_B = MG
+
+seeds: [0, 1, 2]
+
+learner:
+  name: "bc"
+  epochs: 40
+  batch_size: 256
+  hidden: [256, 256]
+
+val_reserve_ph: 20   # PH demos held out as the clean deployment/val target (never trained)
+
+evaluation:
+  num_rollouts: 100
+  metric: "success_rate"
+
+scaling_models:
+  - "power"
+  - "shifted_power"
+  - "exponential"
+
+bootstrap:
+  num_resamples: 500

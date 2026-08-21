@@ -78,6 +78,9 @@ class ClosedLoopReturn(OuterObjective):
     Backpropagates through the (differentiable) env dynamics of a policy rollout, so the outer
     signal reflects *task* performance (compounding action errors) rather than open-loop action
     matching. Requires a learner exposing ``closed_loop_loss(n_episodes, horizon)``.
+
+    Only usable when the env dynamics are differentiable (the torch point-mass). For a real,
+    non-differentiable simulator (robosuite/MuJoCo, Meta-World) use :class:`ClosedLoopRolloutReturn`.
     """
 
     def __init__(self, n_episodes: int = 128, horizon: int | None = None):
@@ -89,3 +92,51 @@ class ClosedLoopReturn(OuterObjective):
         if fn is None:
             raise ValueError("learner does not support ClosedLoopReturn (no closed_loop_loss).")
         return fn(self.n_episodes, self.horizon)
+
+
+class ClosedLoopRolloutReturn(OuterObjective):
+    """Closed-loop **task return** outer objective for a NON-differentiable env (robosuite/MuJoCo).
+
+    The outer signal is the real episodic return obtained by *interacting with the environment*:
+    the policy is rolled out (with Gaussian exploration), and — because we cannot backprop through
+    the simulator — the gradient of the return w.r.t. theta is estimated with the score-function /
+    REINFORCE (policy-gradient) estimator. Concretely, the learner returns the differentiable
+    surrogate
+
+        L_out(theta) = - E_t[ log pi_theta(a_t | s_t) * A_t ],    A_t = R(tau) - baseline
+
+    whose gradient equals -grad_theta E[return]. Minimizing it drives theta (and hence, through the
+    hypergradient, the group weights beta) toward demonstrations that *actually improve task
+    return* — a closed-loop signal, not open-loop action matching.
+
+    Trade-offs vs :class:`ValidationLoss`: this rolls out the env at every beta update (expensive)
+    and the REINFORCE gradient is higher-variance, so use enough episodes and expect noisier beta.
+    Requires a learner exposing the rollout surrogate for the chosen ``variant`` and an attached env.
+
+    Three policy-gradient advantage estimators are selectable via ``variant`` (all share one
+    rollout; pair with ``config.normalize_group_grads=True`` for a stable hypergradient):
+
+    * ``"reinforce"`` -- episodic return, mean baseline (highest variance).
+    * ``"grpo"`` -- group-relative advantage ``(R_i - mean)/std`` over the rollout group, no critic.
+    * ``"ppo"`` -- per-step reward-to-go advantage with a time-baseline (temporal credit assignment).
+    """
+
+    _METHOD = {"reinforce": "rollout_pg_surrogate", "grpo": "rollout_grpo_surrogate",
+               "ppo": "rollout_ppo_surrogate"}
+
+    def __init__(self, n_episodes: int = 32, horizon: int | None = None,
+                 explore_std: float = 0.1, variant: str = "grpo"):
+        if variant not in self._METHOD:
+            raise ValueError(f"variant must be one of {list(self._METHOD)}, got {variant!r}")
+        self.n_episodes = int(n_episodes)
+        self.horizon = horizon
+        self.explore_std = float(explore_std)
+        self.variant = variant
+
+    def loss(self, learner) -> torch.Tensor:
+        fn = getattr(learner, self._METHOD[self.variant], None)
+        if fn is None:
+            raise ValueError(
+                f"learner does not support ClosedLoopRolloutReturn variant '{self.variant}'.")
+        return fn(n_episodes=self.n_episodes, horizon=self.horizon,
+                  explore_std=self.explore_std)

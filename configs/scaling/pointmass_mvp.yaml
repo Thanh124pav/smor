@@ -1,0 +1,39 @@
+# Module 2 — point-mass 2-source scaling MVP (the SCALE-DEPENDENT-optimum demonstration).
+# Sources (re-simulated, §5): A = unbiased but jittery (noise 1.2); B = precise but directionally
+# biased (rotation 30 deg). Bias-variance trade-off -> optimal mixture shifts with budget.
+experiment:
+  name: "pointmass_two_source_scaling"
+
+sources:
+  - id: "A_unbiased_jittery"
+    cost: 1.0
+  - id: "B_biased_precise"
+    cost: 1.0
+
+budgets:
+  all: [50, 100, 200, 400, 800, 1600, 3200]
+  fit: [50, 100, 200, 400, 800]
+  heldout: [1600, 3200]
+
+mixtures:
+  source_A: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+seeds: [0, 1, 2]
+
+learner:
+  name: "bc"
+  epochs: 15
+  batch_size: 256
+  hidden: [64, 64]
+
+evaluation:
+  num_rollouts: 64
+  metric: "success_rate"
+
+scaling_models:
+  - "power"
+  - "shifted_power"
+  - "exponential"
+
+bootstrap:
+  num_resamples: 300

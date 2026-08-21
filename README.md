@@ -34,13 +34,16 @@ smor/
   reweighting/   grouping (n), simplex beta, hvp, neumann P_K, hypergradient, scheduler,
                  online_reweighter (the fit loop), outer_objective, config
   learners/      WeightedLearner contract + BCLearner (behavior cloning)
+  data/          official-dataset loaders: ragged TrajectoryDataset + robomimic/ (PH/MH/MG)
   envs/          small GPU-friendly point-mass goal env + two-fidelity demo generator
+                 + robosuite_env.py (optional real RoboMimic rollout eval)
   evaluation/    real env rollouts, correlation metrics, long-horizon utility (§8)
   baselines/cail/  CAIL/AIRL adapter STUB + original config + reproduction notes (Stage A)
   evidence.py    ReweightingEvidence output object (§16)
   runner.py      point-mass run factory
 experiments/     collect_demos, train_reweighting, validate_hvp, compare_K, compare_n,
-                 run_reweighting_grid
+                 run_reweighting_grid, metaworld_reweight,
+                 robomimic_reweight + robomimic_download (official RoboMimic data)
 configs/         one_step.yaml (K=1), curvature_reweight.yaml (K>1), cail_reproduction.yaml
 tests/           grouping, beta simplex, hvp, neumann, K=1 equivalence, toy bilevel
 ```
@@ -97,6 +100,82 @@ DEVICE=cpu bash scripts/smoke.sh   # force CPU
 The models are tiny MLPs: a full run peaks at ~**20 MB VRAM**, so a 4 GB GPU (e.g. GTX 1650) is
 more than enough; CPU also works. The only slow cells are `n=1` (one β cell per trajectory →
 many HVPs) — override granularities via `NS_COMPARE`/`NS_GRID` env vars if needed.
+
+## Real datasets — RoboMimic (official, multi-fidelity)
+
+Besides the synthetic point-mass / Meta-World sources, SMOR runs directly on the **official
+[RoboMimic](https://robomimic.github.io/) datasets**, which ship demonstrations of *labelled,
+varying human quality* — the real version of the multi-fidelity problem this module reweights:
+
+- **`ph`** proficient-human (200 clean teleop demos), **`mh`** multi-human (300 demos from 6
+  operators, split by skill into `better` / `okay` / `worse` tiers), **`mg`** machine-generated
+  (SAC rollouts of mixed success). The **fidelity label is the real quality tier / variant.**
+
+The loader reads the low-dim HDF5 files (needs only `h5py`; no MuJoCo for training), concatenates
+the canonical low-dim obs keys, and returns a variable-length
+[`TrajectoryDataset`](smor/data/trajectory_dataset.py) — the reweighting core and `BCLearner` run
+unchanged. Datasets download on demand into `data/robomimic/` (or `$SMOR_ROBOMIMIC_ROOT`).
+
+```bash
+# optional pre-download (else it fetches on first use)
+python -m experiments.robomimic_download --mix mh-tiers
+
+# canonical multi-human quality-tier reweighting (held-out val-loss eval — default, no MuJoCo)
+python -m experiments.robomimic_reweight --config configs/robomimic_reweight.yaml \
+    --mix mh-tiers --K 4 --steps 200 --seeds 0 1 2
+
+# arbitrary mixes via a DSL: proficient target (*) + weak human tier + machine failures
+python -m experiments.robomimic_reweight --mix "lift:ph*,lift:mh:worse,lift:mg:mg_fail"
+
+# real success-rate eval in the reconstructed robosuite env (needs: pip install robomimic robosuite)
+python -m experiments.robomimic_reweight --mix mh-tiers --rollout
+```
+
+### Non-trivial reweighting: heterogeneous sources with different influence
+
+The quality-tier mix above has a *trivial* optimum (put all weight on the cleanest tier). For a
+**non-trivial** study, [`robomimic_multisource.py`](experiments/robomimic_multisource.py) treats
+the same real task collected through several mis-calibrated teleop **devices** (each a different
+anisotropic gain / rotation bias on the real actions — see
+[`smor/data/robomimic/multisource.py`](smor/data/robomimic/multisource.py)). No single device
+works (rollout success ~0.1–0.6), so you **must combine** them, and SMOR learns an **interior**
+mixture:
+
+```bash
+# device-calibration sources; single sources fail, SMOR finds an interior blend (val-loss eval)
+python -m experiments.robomimic_multisource --task lift --dtype ph --K 4 --steps 200 --seeds 0 1 2
+
+# + real "poison" (MG failed rollouts): now uniform is suboptimal, so SMOR BEATS uniform AND every
+#   single source while keeping an interior blend of the good sources and driving poison -> 0
+python -m experiments.robomimic_multisource --poison --K 4 --steps 200 --seeds 0 1 2
+
+# closed-loop success-rate eval in robosuite (headless, no rendering) instead of val-loss
+python -m experiments.robomimic_multisource --poison --rollout
+```
+
+On real `lift/ph` + MG-fail poison the `--poison` run gives e.g. `beta ≈ [0.27, 0.32, 0.41, 0.0]`
+(interior over the three good devices, poison rejected) at `val ≈ 0.028` vs `uniform ≈ 0.035` and
+`best-single ≈ 0.037`. Without `--poison`, the interior optimum instead *ties* uniform — because
+the complementary biases already cancel under naive averaging (a real, documented finding, not a
+bug). The optional robosuite rollout needs `pip install "robosuite>=1.4,<1.5" mujoco` (state-based,
+no OpenGL). Closed-loop **magnifies** the gap — on `lift/ph` + poison the systematic errors
+compound over the episode:
+
+| method | rollout success | val loss |
+|---|---|---|
+| uniform (keeps poison) | **0.00** | 0.031 |
+| best single device | 0.80 | 0.032 |
+| **SMOR interior mixture** | **1.00** | 0.025 |
+
+(uniform's validation loss looks only slightly worse, but its rollout success collapses to 0 — the
+poison actions compound; the interior mixture that rejects the poison lifts every time.)
+
+Presets: `mh-tiers`, `ph-plus-mh`, `ph-plus-mg`, `full-spectrum` (see
+[`smor/data/robomimic/spec.py`](smor/data/robomimic/spec.py)); DSL components are
+`task:dtype[:tier][:n]`, `*` marks the clean deployment target. Tasks: `lift`, `can`, `square`,
+`transport`, `tool_hang` (override a preset's task with `--task can`). The two eval options
+(held-out val-loss vs robosuite rollout success rate) are both implemented; **val-loss is the
+default** and needs no MuJoCo.
 
 ## Experiment matrix (`n` × `K`)
 

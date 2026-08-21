@@ -15,6 +15,8 @@ dependencies = [
     "pyyaml>=6.0",
     "pandas>=2.0",
     "tqdm>=4.60",
+    "h5py>=3.8",       # read official RoboMimic HDF5 datasets
+    "requests>=2.28",  # download RoboMimic datasets
 ]
 
 [project.optional-dependencies]
@@ -22,6 +24,9 @@ dependencies = [
 gym = ["gymnasium>=0.29"]
 plots = ["matplotlib>=3.7"]
 dev = ["pytest>=7.0"]
+# Optional: real robosuite/MuJoCo rollout eval for RoboMimic (success rate). Training + the
+# held-out val-loss evaluation need only h5py (a core dep), never this.
+robomimic = ["robomimic>=0.3", "robosuite>=1.4"]
 
 [tool.setuptools.packages.find]
 include = ["smor*"]

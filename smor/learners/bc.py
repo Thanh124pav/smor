@@ -123,7 +123,7 @@ class BCLearner(WeightedLearner):
 
     def evaluate(self, n_episodes: int = 64) -> Dict[str, float]:
         metrics: Dict[str, float] = {}
-        if self.env is not None:
+        if self.env is not None and n_episodes > 0:
             from smor.evaluation.rollout import rollout_policy
 
             self.policy.eval()
@@ -186,6 +186,93 @@ class BCLearner(WeightedLearner):
             pos = torch.clamp(pos + cfg.max_step * action, -cfg.world, cfg.world)
             total = total + (pos - goal).norm(dim=-1).mean()
         return total / H
+
+    # ---- closed-loop (policy-gradient) outer objectives (PLAN.md §7) ----
+    #
+    # A NON-differentiable env (robosuite/MuJoCo/Meta-World) cannot be back-propagated through, so
+    # the gradient of the task return w.r.t. theta is estimated with a policy-gradient (score-
+    # function) surrogate L_out = -E_t[ logpi_theta(a_t|s_t) * A_t ], grad_theta L_out = -grad E[R].
+    # Three advantage estimators are provided (REINFORCE / GRPO / PPO); all share one rollout.
+    # Because the outer signal is TASK RETURN (not action-matching to a privileged clean source),
+    # this avoids the trivial-corner trap of ValidationLoss. Pair with cfg.normalize_group_grads to
+    # stop the noisy g_out from being hijacked by whichever group has the largest gradient.
+
+    @torch.no_grad()
+    def _rollout_collect(self, n_episodes: int, H: int, std: float):
+        """Roll the current policy with Gaussian exploration; return (obs, act, rew, active)."""
+        obs_log, act_log, rew_log, active_log = [], [], [], []
+        self.policy.eval()
+        obs = self.env.reset(n_episodes)
+        done = torch.zeros(n_episodes, dtype=torch.bool, device=obs.device)
+        for _ in range(H):
+            mean = self.policy(obs.to(self.device, self.dtype))
+            a = torch.clamp(mean + std * torch.randn_like(mean), -1.0, 1.0)
+            obs_log.append(obs.to(self.device, self.dtype))
+            act_log.append(a.detach())
+            active_log.append((~done).to(self.device))
+            obs, reward, done_step, _ = self.env.step(a)
+            rew_log.append(reward.to(self.device))
+            done = done | done_step.to(done.device).bool()
+            if bool(done.all()):
+                break
+        self.policy.train()
+        return (torch.stack(obs_log), torch.stack(act_log),
+                torch.stack(rew_log), torch.stack(active_log).float())
+
+    def _pg_surrogate(self, obs_all, act_all, adv_t, active, std) -> torch.Tensor:
+        """-E[ logpi(a|s) * A ] over active steps (differentiable in theta)."""
+        T, B = act_all.shape[0], act_all.shape[1]
+        mean_flat = self.policy(obs_all.reshape(T * B, -1))           # WITH grad
+        a_flat = act_all.reshape(T * B, -1)
+        logp = -0.5 * (((a_flat - mean_flat) / std) ** 2).sum(-1)     # (T*B,) up to const
+        w = (active * adv_t).reshape(-1)
+        return -(logp * w).sum() / active.sum().clamp_min(1.0)
+
+    def rollout_pg_surrogate(self, n_episodes: int = 16, horizon: Optional[int] = None,
+                             explore_std: float = 0.1) -> torch.Tensor:
+        """REINFORCE: episodic return with a MEAN baseline (highest variance)."""
+        if self.env is None:
+            raise ValueError("rollout_pg_surrogate requires an attached env.")
+        H, std = int(horizon or self.env.horizon), float(explore_std)
+        obs_all, act_all, rew_all, active = self._rollout_collect(n_episodes, H, std)
+        returns = (rew_all * active).sum(0)
+        adv = returns - returns.mean()
+        return self._pg_surrogate(obs_all, act_all, adv.unsqueeze(0).expand_as(active), active, std)
+
+    def rollout_grpo_surrogate(self, n_episodes: int = 32, horizon: Optional[int] = None,
+                               explore_std: float = 0.1) -> torch.Tensor:
+        """GRPO: GROUP-RELATIVE advantage ``(R_i - mean)/std`` over the rollout group (no critic)."""
+        if self.env is None:
+            raise ValueError("rollout_grpo_surrogate requires an attached env.")
+        H, std = int(horizon or self.env.horizon), float(explore_std)
+        obs_all, act_all, rew_all, active = self._rollout_collect(n_episodes, H, std)
+        returns = (rew_all * active).sum(0)
+        adv = (returns - returns.mean()) / (returns.std() + 1e-6)     # group-normalized
+        return self._pg_surrogate(obs_all, act_all, adv.unsqueeze(0).expand_as(active), active, std)
+
+    def rollout_ppo_surrogate(self, n_episodes: int = 32, horizon: Optional[int] = None,
+                              explore_std: float = 0.1, gamma: float = 0.99) -> torch.Tensor:
+        """PPO-style: per-step REWARD-TO-GO advantage with a per-timestep baseline, whitened.
+
+        Uses temporal credit assignment (discounted return-to-go G_t minus a batch time-baseline
+        b_t = mean_i G_t^i) rather than the episode-level return of REINFORCE/GRPO — lower-variance,
+        the same advantage PPO/GAE build on (a learned critic + clipped ratio can be added later).
+        """
+        if self.env is None:
+            raise ValueError("rollout_ppo_surrogate requires an attached env.")
+        H, std = int(horizon or self.env.horizon), float(explore_std)
+        obs_all, act_all, rew_all, active = self._rollout_collect(n_episodes, H, std)
+        T, B = rew_all.shape
+        # discounted reward-to-go per step
+        g = torch.zeros(B, device=rew_all.device)
+        rtg = torch.zeros_like(rew_all)
+        for t in range(T - 1, -1, -1):
+            g = rew_all[t] * active[t] + gamma * g
+            rtg[t] = g
+        baseline = (rtg * active).sum(1, keepdim=True) / active.sum(1, keepdim=True).clamp_min(1)
+        adv = rtg - baseline                                          # (T, B)
+        adv = adv / (adv[active > 0].std() + 1e-6)
+        return self._pg_surrogate(obs_all, act_all, adv, active, std)
 
     # ---- checkpointing --------------------------------------------------
     def state_dict(self) -> dict:
